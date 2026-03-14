@@ -1,6 +1,8 @@
 # FGO自动登录种树脚本
 
-自动启动 MuMu 模拟器、登录 FGO、执行种树操作的脚本。
+支持多种安卓模拟器的FGO自动化脚本，包括MuMu、雷电、夜神、蓝叠等。
+
+自动启动模拟器、连接ADB、登录FGO、执行种树操作。
 
 ## 使用前提
 
@@ -12,16 +14,42 @@
 
 编辑 `config.ini` 文件，修改以下关键配置：
 
+#### 通用配置（适用于所有模拟器）
 ```ini
 [Emulator]
-; 模拟器名称（MuMu管理器中显示的名字）
+; 模拟器名称（用于查找实例编号）
 name = kuku
-; ADB连接地址（MuMu模拟器默认端口为 16384 + 实例索引 * 32）
+; ADB连接地址 IP:端口
 ip_port = 127.0.0.1:16416
 
 [Paths]
-; MuMuManager.exe 路径，根据实际安装位置修改
-muemu_manager = G:\MuMu\nx_main\MuMuManager.exe
+; 模拟器管理器路径（根据路径自动识别模拟器类型）
+; 支持的模拟器及路径示例：
+emulator_manager = G:\MuMu\nx_main\MuMuManager.exe
+```
+
+#### 各模拟器配置示例
+
+**MuMu模拟器：**
+```ini
+[Emulator]
+name = kuku
+ip_port = 127.0.0.1:16416
+
+[Paths]
+emulator_manager = G:\MuMu\nx_main\MuMuManager.exe
+```
+
+**通用模式（手动启动模拟器）：**
+```ini
+[Emulator]
+; name 可留空
+name = 
+ip_port = 127.0.0.1:62001
+
+[Paths]
+; emulator_manager 留空或删除此行
+; emulator_manager = 
 ```
 
 ### 2. 配置点击步骤（可选）
@@ -138,6 +166,25 @@ py fgo_bot.py
 - 检查 `ip_port` 配置是否正确
 - 确保模拟器已启动
 - 检查防火墙设置
+
+**如何查找 ADB 地址：**
+
+**通用方法：**
+1. 启动模拟器
+2. 打开命令提示符
+3. 运行 `adb devices` 查看已连接设备
+
+**各模拟器默认端口：**
+- MuMu: 16384 + 实例索引 * 32
+- 雷电: 5555（第一个实例）
+- 夜神: 62001（第一个实例）
+- 蓝叠: 5555
+
+**各模拟器查看实例方法：**
+- MuMu: 运行 `MuMuManager.exe info -v all`
+- 雷电: 运行 `ldconsole.exe list2`
+- 夜神: 运行 `NoxConsole.exe list`
+- 蓝叠: 在设置中查看或直接使用 `adb devices`
 
 **Q: 点击坐标不准确**
 - 开启模拟器的 "显示点击位置" 或 "指针位置" 开发者选项

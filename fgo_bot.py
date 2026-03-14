@@ -56,24 +56,72 @@ def key_event(adb_device, keycode, description=""):
     return run_command(cmd, description)
 
 
+def detect_emulator_commands(manager_path):
+    """根据管理器文件名返回对应的指令格式"""
+    if not manager_path:
+        return None, None, None
+    
+    manager_name = os.path.basename(manager_path).lower()
+    
+    if 'mumumanager' in manager_name:
+        # MuMu: control -v {index} launch/shutdown
+        return 'control -v {index} launch', 'control -v {index} shutdown', 'info -v all'
+    elif 'ldconsole' in manager_name:
+        # 雷电: launch/quit --index {index}
+        return 'launch --index {index}', 'quit --index {index}', 'list2'
+    elif 'noxconsole' in manager_name:
+        # 夜神: launch/quit -index:{index}
+        return 'launch -index:{index}', 'quit -index:{index}', 'list'
+    elif 'hd-player' in manager_name:
+        # 蓝叠: --instance {name} (只支持启动)
+        return '--instance {name}', None, None
+    else:
+        return None, None, None
+
 def get_emulator_instance(config):
     """根据模拟器名称获取实例编号"""
     logger = logging.getLogger(__name__)
-    muemu_path = config.get('Paths', 'muemu_manager')
+    manager_path = config.get('Paths', 'emulator_manager', fallback='')
     target_name = config.get('Emulator', 'name', fallback='').strip()
     
-    if not target_name:
-        logger.error("配置文件未设置模拟器名称")
+    if not manager_path:
+        logger.info("未配置模拟器管理器，使用通用模式")
+        return 0
+    
+    if not os.path.exists(manager_path):
+        logger.error(f"模拟器管理器不存在: {manager_path}")
         return None
     
-    # 检查文件是否存在
-    if not os.path.exists(muemu_path):
-        logger.error(f"MuMuManager.exe 不存在: {muemu_path}")
-        logger.info("请检查 config.ini 中的 muemu_manager 路径配置")
+    # 获取指令格式
+    launch_cmd, shutdown_cmd, list_cmd = detect_emulator_commands(manager_path)
+    
+    if not list_cmd:
+        logger.warning(f"不支持的模拟器管理器: {manager_path}")
         return None
     
+    # 根据不同模拟器执行不同命令
+    manager_name = os.path.basename(manager_path).lower()
+    
+    if 'mumumanager' in manager_name:
+        return get_mumu_instance(config, target_name, logger)
+    elif 'ldconsole' in manager_name:
+        return get_ldplayer_instance(config, target_name, logger)
+    elif 'noxconsole' in manager_name:
+        return get_nox_instance(config, target_name, logger)
+    elif 'hd-player' in manager_name:
+        return get_bluestacks_instance(config, target_name, logger)
+    else:
+        logger.warning(f"不支持的模拟器类型: {manager_name}")
+        return None
+
+def get_mumu_instance(config, target_name, logger):
+    """获取MuMu模拟器实例"""
+    manager_path = config.get('Paths', 'emulator_manager', fallback='')
+    if not manager_path:
+        return None
+        
     # 查询所有模拟器信息
-    cmd = f'"{muemu_path}" info -v all'
+    cmd = f'"{manager_path}" info -v all'
     result = subprocess.run(cmd, shell=True, capture_output=True, text=True, encoding='utf-8', errors='ignore')
     
     if result.returncode != 0:
@@ -83,25 +131,101 @@ def get_emulator_instance(config):
     # 解析JSON输出
     try:
         emulators = json.loads(result.stdout)
+        logger.debug(f"MuMu返回的模拟器数据: {emulators}")
+        # 确保emulators是列表或字典
+        if isinstance(emulators, dict):
+            # 如果是字典，转换为列表
+            emulator_list = []
+            for key, value in emulators.items():
+                if isinstance(value, dict):
+                    value['id'] = key  # 添加id字段
+                    emulator_list.append(value)
+            emulators = emulator_list
+        elif not isinstance(emulators, list):
+            logger.error(f"MuMu返回数据格式不支持: {type(emulators)}")
+            return None
     except json.JSONDecodeError as e:
         logger.error(f"解析模拟器信息失败: {e}")
         logger.debug(f"原始输出: {result.stdout[:200]}")
         return None
     
     # 查找匹配的模拟器
-    for idx, info in emulators.items():
-        emulator_name = info.get('name', '')
-        if target_name.lower() in emulator_name.lower() or emulator_name.lower() in target_name.lower():
-            instance_id = info.get('index', idx)
-            logger.info(f"找到模拟器: {emulator_name} (索引: {instance_id})")
-            return instance_id
+    for emulator in emulators:
+        if emulator.get('name') == target_name:
+            instance_id = emulator.get('id')
+            if instance_id is not None:
+                logger.info(f"找到模拟器实例: {target_name} (ID: {instance_id})")
+                return instance_id
     
-    # 未找到，输出可用列表
-    logger.error(f"未找到名称为 '{target_name}' 的模拟器")
-    logger.info("可用模拟器列表:")
-    for idx, info in emulators.items():
-        logger.info(f"       索引 {info.get('index', idx)}: {info.get('name', '未知')}")
+    logger.error(f"未找到名为 '{target_name}' 的模拟器实例")
+    logger.info("可用的模拟器实例:")
+    for emulator in emulators:
+        logger.info(f"  - {emulator.get('name', 'Unknown')} (ID: {emulator.get('id', 'Unknown')})")
+    
     return None
+
+def get_ldplayer_instance(config, target_name, logger):
+    """获取雷电模拟器实例"""
+    manager_path = config.get('Paths', 'emulator_manager', fallback='')
+    if not manager_path:
+        return None
+        
+    # 雷电使用list2命令获取列表
+    cmd = f'"{manager_path}" list2'
+    result = subprocess.run(cmd, shell=True, capture_output=True, text=True, encoding='utf-8', errors='ignore')
+    
+    if result.returncode != 0:
+        logger.error(f"无法获取雷电模拟器列表，返回码: {result.returncode}")
+        return None
+    
+    # 解析输出（格式：索引,标题,顶部窗口句柄,绑定窗口句柄,是否正在运行,进程PID,分辨率,共享文件夹路径）
+    lines = result.stdout.strip().split('\n')
+    for line in lines:
+        parts = line.split(',')
+        if len(parts) >= 2:
+            index, name = parts[0], parts[1]
+            if name == target_name:
+                logger.info(f"找到雷电模拟器实例: {target_name} (索引: {index})")
+                return int(index)
+    
+    logger.error(f"未找到名为 '{target_name}' 的雷电模拟器实例")
+    return None
+
+def get_nox_instance(config, target_name, logger):
+    """获取夜神模拟器实例"""
+    manager_path = config.get('Paths', 'emulator_manager', fallback='')
+    if not manager_path:
+        return None
+        
+    # 夜神使用list命令获取列表
+    cmd = f'"{manager_path}" list'
+    result = subprocess.run(cmd, shell=True, capture_output=True, text=True, encoding='utf-8', errors='ignore')
+    
+    if result.returncode != 0:
+        logger.error(f"无法获取夜神模拟器列表，返回码: {result.returncode}")
+        return None
+    
+    # 解析输出（格式：索引 名称）
+    lines = result.stdout.strip().split('\n')
+    for line in lines:
+        parts = line.split()
+        if len(parts) >= 2:
+            index, name = parts[0], ' '.join(parts[1:])
+            if name == target_name:
+                logger.info(f"找到夜神模拟器实例: {target_name} (索引: {index})")
+                return int(index)
+    
+    logger.error(f"未找到名为 '{target_name}' 的夜神模拟器实例")
+    return None
+
+def get_bluestacks_instance(config, target_name, logger):
+    """获取蓝叠模拟器实例"""
+    if target_name:
+        logger.info(f"使用蓝叠模拟器实例: {target_name}")
+        return target_name
+    else:
+        logger.info("使用蓝叠模拟器默认实例: Pie64")
+        return "Pie64"
 
 
 def get_emulator_adb_port(config):
@@ -162,7 +286,22 @@ def connect_adb(adb_device, timeout=60, interval=5):
 
 def launch_emulator(config, instance_id=None):
     """启动模拟器"""
-    muemu_path = config.get('Paths', 'muemu_manager')
+    manager_path = config.get('Paths', 'emulator_manager', fallback='')
+    
+    if not manager_path:
+        print("[信息] 未配置模拟器管理器，请手动启动模拟器")
+        return True
+    
+    if not os.path.exists(manager_path):
+        print(f"[错误] 模拟器管理器不存在: {manager_path}")
+        return False
+    
+    # 获取指令格式
+    launch_cmd, shutdown_cmd, list_cmd = detect_emulator_commands(manager_path)
+    
+    if not launch_cmd:
+        print(f"[错误] 不支持的模拟器管理器: {manager_path}")
+        return False
     
     # 如果没有提供实例ID，则获取
     if instance_id is None:
@@ -171,22 +310,53 @@ def launch_emulator(config, instance_id=None):
             print("[错误] 无法获取模拟器实例编号，启动失败")
             return False
     
-    cmd = f'"{muemu_path}" control -v {instance_id} launch'
+    # 构建启动命令
+    manager_name = os.path.basename(manager_path).lower()
+    if 'hd-player' in manager_name:
+        # 蓝叠使用实例名称
+        instance_name = config.get('Emulator', 'name', fallback='Pie64')
+        cmd = f'"{manager_path}" {launch_cmd.format(name=instance_name)}'
+    else:
+        # 其他模拟器使用实例索引
+        cmd = f'"{manager_path}" {launch_cmd.format(index=instance_id)}'
+    
     success = run_command(cmd, "启动模拟器")
     if not success:
         print("[错误] 启动模拟器命令执行失败")
     return success
 
-
 def shutdown_emulator(config):
     """关闭模拟器"""
-    muemu_path = config.get('Paths', 'muemu_manager')
-    instance = get_emulator_instance(config)
+    manager_path = config.get('Paths', 'emulator_manager', fallback='')
     
+    if not manager_path:
+        print("[信息] 未配置模拟器管理器，请手动关闭模拟器")
+        return True
+    
+    if not os.path.exists(manager_path):
+        print(f"[错误] 模拟器管理器不存在: {manager_path}")
+        return False
+    
+    # 获取指令格式
+    launch_cmd, shutdown_cmd, list_cmd = detect_emulator_commands(manager_path)
+    
+    if not shutdown_cmd:
+        manager_name = os.path.basename(manager_path).lower()
+        if 'hd-player' in manager_name:
+            print("[信息] 蓝叠模拟器通过ADB关闭应用，不关闭整个模拟器")
+            return True
+        else:
+            print(f"[错误] 不支持的模拟器管理器: {manager_path}")
+            return False
+    
+    instance = get_emulator_instance(config)
     if instance is None:
         return False
     
-    cmd = f'"{muemu_path}" control -v {instance} shutdown'
+    # 构建关闭命令
+    manager_name = os.path.basename(manager_path).lower()
+    cmd = f'"{manager_path}" {shutdown_cmd.format(index=instance)}'
+    
     return run_command(cmd, "关闭模拟器")
 
 
